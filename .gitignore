@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+wheels/
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# Test / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Generated output (do not commit example renders)
+*.png
+!docs/**/*.png
+
+# But DO keep the bundled font + license (force-include despite any rule above)
+!handwriting_generator/fonts/ShadowsIntoLight.ttf
+!handwriting_generator/fonts/OFL.txt
