@@ -59,6 +59,8 @@ examples:
   handwriting-generator "in my own hand" --hand me -o mine.png
 
 note: default ink is blue (#1a1a8a) by design; pass --color black for black.
+      "template" and "ingest" are subcommands; to render those literal words use
+      e.g.  handwriting-generator render "template"
 """
 
 
@@ -198,6 +200,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _cmd_template(raw[1:])
     if raw and raw[0] == "ingest":
         return _cmd_ingest(raw[1:])
+    if raw and raw[0] == "render":
+        # Explicit escape so the literal words "template"/"ingest" can be rendered.
+        raw = raw[1:]
 
     parser = build_parser()
     args = parser.parse_args(raw)

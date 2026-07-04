@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter
 
 from . import template as T
 
@@ -30,27 +30,47 @@ def _to_gray(img: Image.Image) -> np.ndarray:
     return np.asarray(img.convert("L"), dtype=np.uint8)
 
 
-def _find_marks(gray: np.ndarray) -> Optional[List[Tuple[float, float]]]:
+def _find_marks(
+    gray: np.ndarray, page: Tuple[int, int]
+) -> Optional[List[Tuple[float, float]]]:
     """Centers of the 4 corner registration marks (TL, TR, BL, BR), or None.
 
-    Looks in each corner third for a solid-dark blob and returns its centroid.
+    Erodes thin ink strokes (a ``MaxFilter`` grows the light background) so only
+    the SOLID mark squares survive, then centroids each corner region of the
+    eroded mask. This is both ink-robust (a filled sheet's strokes vanish, so
+    they can't drag the centroid — the bug that silently mis-warped every glyph)
+    and scale/rotation-tolerant (the search region is generous, unlike a tight
+    window that misses skew-displaced marks).
     """
     h, w = gray.shape
-    qh, qw = h // 3, w // 3
+    page_w, page_h = page
+    sx, sy = w / float(page_w), h / float(page_h)
+    # Erode by a bit less than half the mark: kills pen strokes, keeps the square.
+    k = max(7, min(15, int(round(min(sx, sy) * T.MARK * 0.4))))
+    if k % 2 == 0:
+        k += 1
+    eroded = np.asarray(
+        Image.fromarray(gray).filter(ImageFilter.MaxFilter(k)), dtype=np.uint8
+    )
+    rh, rw = int(h * 0.28), int(w * 0.28)
     regions = [
-        (0, 0, qh, qw),
-        (0, w - qw, qh, w),
-        (h - qh, 0, h, qw),
-        (h - qh, w - qw, h, w),
+        (0, 0, rh, rw),
+        (0, w - rw, rh, w),
+        (h - rh, 0, h, rw),
+        (h - rh, w - rw, h, w),
     ]
+    need = max(9, int((T.MARK * T.MARK * sx * sy) // 8))
     centers: List[Tuple[float, float]] = []
-    need = max(9, (T.MARK * T.MARK) // 4)
     for y0, x0, y1, x1 in regions:
-        sub = gray[y0:y1, x0:x1]
-        ys, xs = np.nonzero(sub <= 80)
+        ys, xs = np.nonzero(eroded[y0:y1, x0:x1] <= 80)
         if len(xs) < need:
             return None
         centers.append((x0 + float(xs.mean()), y0 + float(ys.mean())))
+    # Reject a degenerate quad (the marks must span most of the page).
+    xs4 = [c[0] for c in centers]
+    ys4 = [c[1] for c in centers]
+    if (max(xs4) - min(xs4)) < 0.5 * w or (max(ys4) - min(ys4)) < 0.5 * h:
+        return None
     return centers
 
 
@@ -73,7 +93,7 @@ def _to_canonical(img: Image.Image, page: Tuple[int, int]) -> np.ndarray:
     """Warp/scale ``img`` to canonical template geometry; return grayscale."""
     page_w, page_h = page
     gray_full = _to_gray(img)
-    marks = _find_marks(gray_full)
+    marks = _find_marks(gray_full, page)
     if marks is not None:
         try:
             dst = T.registration_marks(page_w, page_h)  # canonical (output) pts
