@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "handwriting-generator"
-version = "0.1.0"
-description = "Render text as a natural-looking handwriting PNG using a handwriting-style font with subtle per-glyph randomization. Fully offline (no ML, no network)."
+version = "0.2.0"
+description = "Render text as a natural-looking handwriting PNG — using a handwriting-style font, or your OWN handwriting captured from a printed template. Fully offline (no ML, no network)."
 readme = "README.md"
 requires-python = ">=3.8"
 license = { file = "LICENSE" }
@@ -21,7 +21,7 @@ classifiers = [
     "Topic :: Multimedia :: Graphics",
     "Topic :: Text Processing :: Fonts",
 ]
-dependencies = ["Pillow>=9.1.0"]
+dependencies = ["Pillow>=9.1.0", "numpy>=1.21"]
 
 [project.optional-dependencies]
 test = ["pytest>=7.0"]

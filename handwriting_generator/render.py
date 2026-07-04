@@ -25,6 +25,7 @@ from PIL import Image, ImageColor, ImageDraw, ImageFont
 from . import jitter as _jitter
 from . import paper as _paper
 from .fonts import default_font_path
+from .hand import HandPack
 from .layout import measure_text_width, wrap_text
 
 PathLike = Union[str, Path]
@@ -59,6 +60,7 @@ class RenderConfig:
     paper: str = "blank"
     margin: int = 40
     seed: Optional[int] = None
+    hand_path: Optional[PathLike] = None
 
     def __post_init__(self) -> None:
         if self.size <= 0:
@@ -82,6 +84,12 @@ class HandwritingRenderer:
         self.config = config or RenderConfig()
         self._font = self._load_font(self.config.font_path, self.config.size)
         self._ink = ImageColor.getrgb(self.config.color)
+        if self.config.hand_path is not None:
+            self._hand: Optional[HandPack] = HandPack.load(str(self.config.hand_path))
+            self._hand_scale = self.config.size / self._hand.cap_px
+        else:
+            self._hand = None
+            self._hand_scale = 1.0
 
     # -- public API ---------------------------------------------------------
 
@@ -173,7 +181,7 @@ class HandwritingRenderer:
         cfg = self.config
         max_text_w = 0.0
         for line in lines:
-            max_text_w = max(max_text_w, measure_text_width(font, line))
+            max_text_w = max(max_text_w, self._line_advance(line, font))
 
         # Allow jitter room so rotated/offset glyphs at line ends don't clip.
         jitter_pad = cfg.jitter * cfg.size * 0.25
@@ -207,16 +215,25 @@ class HandwritingRenderer:
         cfg = self.config
         pen_x = x0
         pad = int(cfg.size * self._GLYPH_PAD_FACTOR) + 2
+        hand = self._hand
 
         for ch in line:
+            j = _jitter.glyph_jitter(rng, cfg.jitter)
+
+            # Prefer a captured glyph from the user's hand pack when present.
+            if hand is not None and hand.has(ch):
+                rec = hand.sample(ch, rng)
+                self._stamp_hand(
+                    ink_layer, hand, rec, pen_x=pen_x, baseline=baseline, jitter=j
+                )
+                pen_x += hand.advance(ch, rec, self._hand_scale) + j.dx
+                continue
+
             # Advance width from the unperturbed glyph keeps spacing stable.
             advance = font.getlength(ch)
 
-            j = _jitter.glyph_jitter(rng, cfg.jitter)
-
             if ch == " " or not ch.strip():
-                # Whitespace contributes advance only; nothing to draw, but we
-                # still consumed RNG draws above to keep the stream aligned.
+                # Whitespace contributes advance only; nothing to draw.
                 pen_x += advance + j.dx
                 continue
 
@@ -313,6 +330,77 @@ class HandwritingRenderer:
         paste_y = int(round(intended_center_y - cy))
 
         ink_layer.alpha_composite(tile, dest=(max(paste_x, 0), max(paste_y, 0)))
+
+    def _stamp_hand(
+        self,
+        ink_layer: Image.Image,
+        hand: HandPack,
+        rec: Optional[dict],
+        pen_x: float,
+        baseline: float,
+        jitter: _jitter.GlyphJitter,
+    ) -> None:
+        """Stamp one captured glyph tile at the baseline, perturbed by jitter.
+
+        Mirrors :meth:`_stamp_glyph`'s center-based placement, but the tile is a
+        pre-inked coverage image from the hand pack rather than a font draw. The
+        tile's pen origin is ``(0, baseline_y)`` (left ink edge, writing baseline).
+        """
+        if rec is None:
+            return
+        tile, baseline_y = hand.glyph_tile(rec, self._hand_scale, self._ink)
+        origin_x = 0.0
+
+        tw, th = tile.width, tile.height
+        if abs(jitter.scale - 1.0) > 1e-6:
+            tile = tile.resize(
+                (
+                    max(1, int(round(tw * jitter.scale))),
+                    max(1, int(round(th * jitter.scale))),
+                ),
+                resample=Image.BICUBIC,
+            )
+            scale = jitter.scale
+        else:
+            scale = 1.0
+
+        pre_w = max(1, int(round(tw * scale)))
+        pre_h = max(1, int(round(th * scale)))
+
+        if abs(jitter.rotation) > 1e-6:
+            tile = tile.rotate(jitter.rotation, resample=Image.BICUBIC, expand=True)
+
+        scaled_origin_x = origin_x * scale
+        scaled_origin_y = baseline_y * scale
+        pre_cx = pre_w / 2.0
+        pre_cy = pre_h / 2.0
+        cx = tile.width / 2.0
+        cy = tile.height / 2.0
+
+        intended_origin_x = pen_x
+        intended_origin_y = baseline + jitter.dy
+        intended_center_x = intended_origin_x + (pre_cx - scaled_origin_x)
+        intended_center_y = intended_origin_y + (pre_cy - scaled_origin_y)
+
+        paste_x = int(round(intended_center_x - cx))
+        paste_y = int(round(intended_center_y - cy))
+        ink_layer.alpha_composite(tile, dest=(max(paste_x, 0), max(paste_y, 0)))
+
+    def _line_advance(self, line: str, font: ImageFont.FreeTypeFont) -> float:
+        """Total advance width of ``line`` under the active glyph source.
+
+        Falls back to the font's whole-string measure when no hand pack is
+        active, keeping font-only output byte-identical to before.
+        """
+        if self._hand is None:
+            return measure_text_width(font, line)
+        total = 0.0
+        for ch in line:
+            if self._hand.has(ch):
+                total += self._hand.nominal_advance(ch, self._hand_scale)
+            else:
+                total += font.getlength(ch)
+        return total
 
 
 def render_text(text: str, output_path: PathLike, **kwargs) -> Tuple[int, int]:
